@@ -16,6 +16,8 @@
  */
 package com.pinterest.secor.tools;
 
+import com.google.common.base.Joiner;
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.google.common.net.HostAndPort;
@@ -60,6 +62,7 @@ public class ProgressMonitor {
     private ZookeeperConnector mZookeeperConnector;
     private KafkaClient mKafkaClient;
     private MessageParser mMessageParser;
+    private String mPrefix;
 
     public ProgressMonitor(SecorConfig config)
             throws Exception
@@ -69,6 +72,11 @@ public class ProgressMonitor {
         mKafkaClient = new KafkaClient(mConfig);
         mMessageParser = (MessageParser) ReflectionUtil.createMessageParser(
                 mConfig.getMessageParserClass(), mConfig);
+
+        mPrefix = mConfig.getMonitoringPrefix();
+        if (Strings.isNullOrEmpty(mPrefix)) {
+            mPrefix = "secor";
+        }
     }
 
     private void makeRequest(String body) throws IOException {
@@ -115,7 +123,7 @@ public class ProgressMonitor {
 
     private void exportToTsdb(Stat stat)
             throws IOException {
-        LOG.info("exporting metric to tsdb " + stat);
+        LOG.info("exporting metric to tsdb {}", stat);
         makeRequest(stat.toString());
     }
 
@@ -166,7 +174,7 @@ public class ProgressMonitor {
         for (String topic : topics) {
             if (topic.matches(mConfig.getMonitoringBlacklistTopics()) ||
                     !topic.matches(mConfig.getKafkaTopicFilter())) {
-                LOG.info("skipping topic " + topic);
+                LOG.info("skipping topic {}", topic);
                 continue;
             }
             List<Integer> partitions = mZookeeperConnector.getCommittedOffsetPartitions(topic);
@@ -176,8 +184,7 @@ public class ProgressMonitor {
                 long committedOffset = - 1;
                 long committedTimestampMillis = -1;
                 if (committedMessage == null) {
-                    LOG.warn("no committed message found in topic " + topic + " partition " +
-                        partition);
+                    LOG.warn("no committed message found in topic {} partition {}", topic, partition);
                 } else {
                     committedOffset = committedMessage.getOffset();
                     committedTimestampMillis = getTimestamp(committedMessage);
@@ -185,7 +192,7 @@ public class ProgressMonitor {
 
                 Message lastMessage = mKafkaClient.getLastMessage(topicPartition);
                 if (lastMessage == null) {
-                    LOG.warn("no message found in topic " + topic + " partition " + partition);
+                    LOG.warn("no message found in topic {} partition {}", topic, partition);
                 } else {
                     long lastOffset = lastMessage.getOffset();
                     long lastTimestampMillis = getTimestamp(lastMessage);
@@ -200,18 +207,21 @@ public class ProgressMonitor {
                     );
 
                     long timestamp = System.currentTimeMillis() / 1000;
-                    stats.add(Stat.createInstance("secor.lag.offsets", tags, Long.toString(offsetLag), timestamp));
-                    stats.add(Stat.createInstance("secor.lag.seconds", tags, Long.toString(timestampMillisLag / 1000), timestamp));
+                    stats.add(Stat.createInstance(metricName("lag.offsets"), tags, Long.toString(offsetLag), timestamp));
+                    stats.add(Stat.createInstance(metricName("lag.seconds"), tags, Long.toString(timestampMillisLag / 1000), timestamp));
 
-                    LOG.debug("topic " + topic + " partition " + partition + " committed offset " +
-                        committedOffset + " last offset " + lastOffset + " committed timestamp " +
-                            (committedTimestampMillis / 1000) + " last timestamp " +
-                            (lastTimestampMillis / 1000));
+                    LOG.debug("topic {} partition {} committed offset {} last offset {} committed timestamp {} last timestamp {}",
+                            topic, partition, committedOffset, lastOffset,
+                            (committedTimestampMillis / 1000), (lastTimestampMillis / 1000));
                 }
             }
         }
 
         return stats;
+    }
+
+    private String metricName(String key) {
+        return Joiner.on(".").join(mPrefix, key);
     }
 
     private long getTimestamp(Message message) throws Exception {

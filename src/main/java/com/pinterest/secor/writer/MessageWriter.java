@@ -48,6 +48,7 @@ public class MessageWriter {
     private String mFileExtension;
     private CompressionCodec mCodec;
     private String mLocalPrefix;
+    private final int mGeneration;
 
     public MessageWriter(SecorConfig config, OffsetTracker offsetTracker,
                          FileRegistry fileRegistry) throws Exception {
@@ -61,6 +62,7 @@ public class MessageWriter {
             mFileExtension = "";
         }
         mLocalPrefix = mConfig.getLocalPath() + '/' + IdUtil.getLocalMessageDir();
+        mGeneration = mConfig.getGeneration();
     }
 
     public void adjustOffset(Message message) throws IOException {
@@ -70,10 +72,10 @@ public class MessageWriter {
         if (message.getOffset() != lastSeenOffset + 1) {
             StatsUtil.incr("secor.consumer_rebalance_count." + topicPartition.getTopic());
             // There was a rebalancing event since we read the last message.
-            LOG.debug("offset of message " + message +
-                      " does not follow sequentially the last seen offset " + lastSeenOffset +
-                      ".  Deleting files in topic " + topicPartition.getTopic() + " partition " +
-                      topicPartition.getPartition());
+            LOG.debug("offset of message {} does not follow sequentially the last seen offset {}. " +
+                            "Deleting files in topic {} partition {}",
+                    message, lastSeenOffset, topicPartition.getTopic(), topicPartition.getPartition());
+
             mFileRegistry.deleteTopicPartition(topicPartition);
         }
         mOffsetTracker.setLastSeenOffset(topicPartition, message.getOffset());
@@ -83,11 +85,11 @@ public class MessageWriter {
         TopicPartition topicPartition = new TopicPartition(message.getTopic(),
                                                            message.getKafkaPartition());
         long offset = mOffsetTracker.getAdjustedCommittedOffsetCount(topicPartition);
-        LogFilePath path = new LogFilePath(mLocalPrefix, mConfig.getGeneration(), offset, message,
+        LogFilePath path = new LogFilePath(mLocalPrefix, mGeneration, offset, message,
         		mFileExtension);
         FileWriter writer = mFileRegistry.getOrCreateWriter(path, mCodec);
         writer.write(new KeyValue(message.getOffset(), message.getPayload()));
         LOG.debug("appended message {} to file {}.  File length {}",
-                  message, path.getLogFilePath(), writer.getLength());
+                  message, path, writer.getLength());
     }
 }
